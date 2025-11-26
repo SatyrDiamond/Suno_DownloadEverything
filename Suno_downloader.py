@@ -4,10 +4,11 @@ import random
 import re
 import sys
 import time
+import json
 
 import requests
 from colorama import Fore, init
-from mutagen.id3 import ID3, APIC, TIT2, TPE1, error
+from mutagen.id3 import ID3, APIC, TIT2, TPE1, TCON, error
 from mutagen.mp3 import MP3
 
 init(autoreset=True)
@@ -24,7 +25,7 @@ def pick_proxy_dict(proxies_list):
     proxy = random.choice(proxies_list)
     return {"http": proxy, "https": proxy}
 
-def embed_metadata(mp3_path, image_url=None, title=None, artist=None, proxies_list=None, token=None, timeout=15):
+def embed_metadata(mp3_path, meta_path, image_url=None, title=None, artist=None, proxies_list=None, token=None, timeout=15, meta={}):
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     proxy_dict = pick_proxy_dict(proxies_list)
     r = requests.get(image_url, proxies=proxy_dict, headers=headers, timeout=timeout)
@@ -38,12 +39,16 @@ def embed_metadata(mp3_path, image_url=None, title=None, artist=None, proxies_li
 
     if title: audio.tags["TIT2"] = TIT2(encoding=3, text=title)
     if artist: audio.tags["TPE1"] = TPE1(encoding=3, text=artist)
+    if 'tags' in meta: audio.tags["TCON"] = TCON(encoding=3, text=meta['tags'])
 
     for key in list(audio.tags.keys()):
         if key.startswith("APIC"): del audio.tags[key]
 
     audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_bytes))
     audio.save(v2_version=3)
+
+    with open(meta_path, "w") as f:
+        f.write( json.dumps(meta) )
 
 def extract_private_song_info(token_string, proxies_list=None):
     print(f"{Fore.CYAN}Extracting private songs using Authorization Token...")
@@ -74,9 +79,9 @@ def extract_private_song_info(token_string, proxies_list=None):
 
         print(f"{Fore.GREEN}Found {len(clips)} clips on page {page}.")
         for clip in clips:
-            uuid, title, audio_url, image_url = clip.get("id"), clip.get("title"), clip.get("audio_url"), clip.get("image_url")
+            uuid, title, audio_url, image_url, metadata = clip.get("id"), clip.get("title"), clip.get("audio_url"), clip.get("image_url"), clip.get("metadata")
             if (uuid and title and audio_url) and uuid not in song_info:
-                song_info[uuid] = {"title": title, "audio_url": audio_url, "image_url": image_url, "display_name": clip.get("display_name")}
+                song_info[uuid] = {"title": title, "audio_url": audio_url, "image_url": image_url, "display_name": clip.get("display_name"), "metadata": metadata}
         page += 1
         time.sleep(5)
     return song_info
@@ -122,7 +127,8 @@ def main():
     print(f"\n{Fore.CYAN}--- Starting Download Process ({len(songs)} songs to check) ---")
     for uuid, obj in songs.items():
         title = obj["title"] or uuid
-        fname = sanitize_filename(title) + ".mp3"
+        titlename = sanitize_filename(title)
+        fname = titlename + ".mp3"
         out_path = os.path.join(args.directory, fname)
 
         print(f"Processing: {Fore.GREEN}🎵 {title}")
@@ -135,7 +141,7 @@ def main():
             
             if args.with_thumbnail and obj.get("image_url"):
                 print(f"  -> Embedding thumbnail...")
-                embed_metadata(saved_path, image_url=obj["image_url"], token=args.token, artist=obj.get("display_name"), title=title)
+                embed_metadata(saved_path, saved_path+'.json', image_url=obj["image_url"], token=args.token, artist=obj.get("display_name"), title=title, meta=obj["metadata"])
             
             # Let the user know if a new version was created
             if os.path.basename(saved_path) != os.path.basename(out_path):
